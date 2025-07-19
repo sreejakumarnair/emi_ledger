@@ -119,7 +119,7 @@ if not st.session_state.ledger_df.empty:
 
         def draw_header(y):
             try:
-                c.drawImage("Sreeja.ico", x=2*cm, y=height - y - 2*cm, width=2*cm, height=2*cm, mask='auto')
+                c.drawImage("sreeja.ico", x=2*cm, y=height - y - 2*cm, width=2*cm, height=2*cm, mask='auto')
             except Exception:
                 pass
             c.setFont("DejaVu", 12)
