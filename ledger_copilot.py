@@ -1,6 +1,6 @@
-import csv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import pandas as pd
 
 DATE_FMT = "%d-%m-%y"
 
@@ -11,24 +11,30 @@ class LedgerEvent:
         self.amount = amount
 
 class OverdraftLedger:
-    def __init__(self, principal, annual_rate, tenure_years, disbursement_date, test_mode=False, ui_mode=False):
+    def __init__(self, principal, annual_rate, tenure_years, disbursement_date,
+                 custom_emi=None, test_mode=False, ui_mode=False):
         self.test_mode = test_mode
         self.ui_mode = ui_mode
 
+        # --- Validation ---
         if not isinstance(principal, (int, float)) or principal <= 0:
             raise ValueError("Loan principal must be a positive number.")
         if not isinstance(annual_rate, (int, float)) or annual_rate <= 0:
             raise ValueError("Interest rate must be a positive number.")
         if not isinstance(tenure_years, (int, float)) or tenure_years <= 0:
-            raise ValueError("Tenure must be a positive number of years.")
+            raise ValueError("Tenure must be a positive number.")
 
+        # --- Parameters ---
         self.principal = principal
         self.outstanding = principal
         self.deposit_balance = 0
         self.rate_day = annual_rate / 365 / 100
         self.tenure_months = int(tenure_years * 12)
         self.disbursement_date = disbursement_date
-        self.emi = self.compute_emi(annual_rate, tenure_years)
+        self.custom_emi = custom_emi
+        self.emi = custom_emi or self.compute_emi(annual_rate, tenure_years)
+
+        # --- State ---
         self.events = []
         self.ledger = []
         self.loan_closure_flag = False
@@ -37,12 +43,10 @@ class OverdraftLedger:
     def compute_emi(self, annual_rate, tenure_years):
         r = annual_rate / 100
         n = tenure_years
-        if r <= 0 or n <= 0:
-            raise ValueError("Cannot compute EMI with zero or negative interest rate or tenure.")
         p = self.principal
         denominator = (1 + r)**n - 1
         if denominator == 0:
-            raise ValueError("Invalid EMI denominator calculation.")
+            raise ValueError("Invalid EMI calculation.")
         yearly_emi = p * r * (1 + r)**n / denominator
         monthly_emi = yearly_emi / 12
         return round(monthly_emi, 2)
@@ -70,33 +74,10 @@ class OverdraftLedger:
             "Adjusted Principal": round(adjusted, 2)
         }
 
-    def get_additional_events(self):
-        if self.test_mode or self.ui_mode:
-            print("🎯 UI/Test Mode: Suppressing additional input prompts.")
-            return
-
-        print("\n📥 Enter more entries or type 'esc' to skip:")
-        for ev_type in ["Deposit", "Pre-Pay", "Withdraw"]:
-            while True:
-                response = input(f"Any {ev_type}s? (y/n or esc): ").strip().lower()
-                if response == "esc":
-                    return
-                elif response == "y":
-                    count = int(input(f"How many {ev_type}s? "))
-                    for i in range(count):
-                        ev_date = datetime.strptime(input(f"Enter {ev_type} {i+1} date (dd-mm-yy): "), DATE_FMT)
-                        ev_amt = float(input(f"Enter {ev_type} {i+1} amount: "))
-                        self.add_event(ev_date, ev_type, ev_amt)
-                    break
-                elif response == "n":
-                    break
-                else:
-                    print("⚠️ Please enter 'y', 'n', or 'esc'.")
-
     def process(self):
         self.events.append(LedgerEvent(self.disbursement_date, "Start", 0))
 
-        # EMI starts one month after disbursement
+        # EMI Schedule
         for i in range(self.tenure_months):
             emi_date = self.disbursement_date + relativedelta(months=i+1)
             self.events.append(LedgerEvent(emi_date, "EMI", self.emi))
@@ -113,15 +94,14 @@ class OverdraftLedger:
             accrued_interest += interest
 
             if adjusted <= 0 and prev_adjusted > 0 and not self.loan_closure_flag:
-                print(f"\n💡 Adjusted principal reached zero on {ev.date.strftime('%d-%m-%Y')}.")
-                print("👉 Would you like to act now?")
-                self.get_additional_events()
-                self.events.sort(key=lambda x: x.date)
+                if self.ui_mode:
+                    print(f"💡 Adjusted principal zero on {ev.date.strftime('%d-%m-%Y')}")
+                self.loan_closure_flag = True
 
             if self.outstanding <= 0 and not self.loan_closure_flag:
                 self.loan_closure_flag = True
-                print(f"\n🎉 Loan fully repaid by {ev.date.strftime('%d-%m-%Y')}")
-                print("✅ All future EMIs will be zero.")
+                if self.ui_mode:
+                    print(f"🎉 Loan closed on {ev.date.strftime('%d-%m-%Y')}")
 
             if ev.type == "Deposit":
                 self.deposit_balance += ev.amount
@@ -145,12 +125,10 @@ class OverdraftLedger:
             prev_date = ev.date
             prev_adjusted = adjusted
 
-    def display(self):
-        for row in self.ledger:
-            print(row)
+    def get_dataframe(self):
+        return pd.DataFrame(self.ledger)
 
-    def export_csv(self, filename="loan_ledger.csv"):
-        with open(filename, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=self.ledger[0].keys())
-            writer.writeheader()
-            writer.writerows(self.ledger)
+    def get_closure_date(self):
+        df = self.get_dataframe()
+        zero_row = df[df["Adjusted Principal"] <= 0]
+        return zero_row.iloc[0]["Date"] if not zero_row.empty else None
