@@ -1,1 +1,3 @@
 __pycache__/\n*.pyc\n*.exe\n*.spec\nbuild/\ndist/\n*.png\n*.jpg\n*.log
+!sreeja.png
+__pycache__/
